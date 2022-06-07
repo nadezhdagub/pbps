@@ -11,6 +11,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <time.h>
+#include <syslog.h>
+
 #define MAX_CONNECTIONS 1000
 #define BUF_SIZE 65535
 #define QUEUE_SIZE 1000000
@@ -27,33 +30,48 @@ char *method, // "GET" or "POST"
     *uri,     // "/index.html" things before '?'
     *qs,      // "a=1&b=2" things after  '?'
     *prot,    // "HTTP/1.1"
-    *payload; // for POST
+    *payload, // for POST
+    *message_log,
+    *responseSize; 
 
 int payload_size;
+struct sockaddr_in clientaddr; //////////////////////////
+//FILE *file;
+
 
 void serve_forever(const char *PORT) {
-  struct sockaddr_in clientaddr;
+  //file = fopen("/prog/pbps/04.pico-foxweb/log.txt", "w");
   socklen_t addrlen;
 
   int slot = 0;
+  
+  /*printf("fsdgsdgfsdgsggreyhgeryhgersyhgwes5rghbwres5ghwesr5gherhbertherhet");
+  
+  fprintf(file, "%s\n", 
+                "hell"); 
+  
+  fclose(file);*/
+  
+  message_log = malloc(1000);
+  
+  sprintf(message_log, "Server started %shttp://127.0.0.1:%s%s\n", "\033[92m", PORT, 
+          "\033[0m");
+  syslog(LOG_INFO, "%s", message_log);
 
-  printf("Server started %shttp://127.0.0.1:%s%s\n", "\033[92m", PORT,
-         "\033[0m");
-
-  // create shared memory for client slot array
+  // create shared memory for client slot array создание общей памяти для массива клиентских слотов
   clients = mmap(NULL, sizeof(*clients) * MAX_CONNECTIONS,
                  PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
 
-  // Setting all elements to -1: signifies there is no client connected
+  // Setting all elements to -1: signifies there is no client connected Установка для всех элементов значения -1: означает, что клиент не подключен
   int i;
   for (i = 0; i < MAX_CONNECTIONS; i++)
     clients[i] = -1;
   start_server(PORT);
 
-  // Ignore SIGCHLD to avoid zombie threads
+  // Ignore SIGCHLD to avoid zombie threads Игнорируйте SIGCHLD, чтобы избежать потоков зомби
   signal(SIGCHLD, SIG_IGN);
 
-  // ACCEPT connections
+  // ACCEPT connections ПРИНИМАТЬ соединения
   while (1) {
     addrlen = sizeof(clientaddr);
     clients[slot] = accept(listenfd, (struct sockaddr *)&clientaddr, &addrlen);
@@ -91,7 +109,7 @@ void start_server(const char *port) {
     perror("getaddrinfo() error");
     exit(1);
   }
-  // socket and bind
+  // socket and bind гнездо и привязка
   for (p = res; p != NULL; p = p->ai_next) {
     int option = 1;
     listenfd = socket(p->ai_family, p->ai_socktype, 0);
@@ -108,14 +126,14 @@ void start_server(const char *port) {
 
   freeaddrinfo(res);
 
-  // listen for incoming connections
+  // listen for incoming connections прослушивание входящих подключений
   if (listen(listenfd, QUEUE_SIZE) != 0) {
     perror("listen() error");
     exit(1);
   }
 }
 
-// get request header by name
+// get request header by name получить заголовок запроса по имени
 char *request_header(const char *name) {
   header_t *h = reqhdr;
   while (h->name) {
@@ -126,20 +144,20 @@ char *request_header(const char *name) {
   return NULL;
 }
 
-// get all request headers
+// get all request headers получить все заголовки запросов
 header_t *request_headers(void) { return reqhdr; }
 
-// Handle escape characters (%xx)
+// Handle escape characters (%xx) Обрабатывать экранирующие символы
 static void uri_unescape(char *uri) {
   char chr = 0;
   char *src = uri;
   char *dst = uri;
 
-  // Skip inital non encoded character
+  // Skip inital non encoded character Пропустить начальный некодированный символ
   while (*src && !isspace((int)(*src)) && (*src != '%'))
     src++;
 
-  // Replace encoded characters with corresponding code.
+  // Replace encoded characters with corresponding code. Замените закодированные символы соответствующим кодом.
   dst = src;
   while (*src && !isspace((int)(*src))) {
     if (*src == '+')
@@ -157,18 +175,18 @@ static void uri_unescape(char *uri) {
   *dst = '\0';
 }
 
-// client connection
+// client connection подключение к клиенту
 void respond(int slot) {
   int rcvd;
 
   buf = malloc(BUF_SIZE);
   rcvd = recv(clients[slot], buf, BUF_SIZE, 0);
 
-  if (rcvd < 0) // receive error
+  if (rcvd < 0) // receive error ошибка приема
     fprintf(stderr, ("recv() error\n"));
-  else if (rcvd == 0) // receive socket closed
+  else if (rcvd == 0) // receive socket closed приемное гнездо закрыто
     fprintf(stderr, "Client disconnected upexpectedly.\n");
-  else // message received
+  else // message received полученное сообщение
   {
     buf[rcvd] = '\0';
 
@@ -178,14 +196,22 @@ void respond(int slot) {
 
     uri_unescape(uri);
 
-    fprintf(stderr, "\x1b[32m + [%s] %s\x1b[0m\n", method, uri);
+    time_t rawtime;
+    struct tm * timeinfo;
+    char dateTime [80];
+    time (&rawtime);
+    timeinfo = localtime (&rawtime);
+    strftime(dateTime, 30, "%d/%b/%Y:%H:%M:%S %z", timeinfo);
 
+    char *clientIp = inet_ntoa(clientaddr.sin_addr);
+    sprintf(message_log, "%s :: [%s] \"%s %s %s\"", clientIp, dateTime, method, uri, prot);
+ 
     qs = strchr(uri, '?');
 
     if (qs)
-      *qs++ = '\0'; // split URI
+      *qs++ = '\0'; // split URI разделенный URI
     else
-      qs = uri - 1; // use an empty string
+      qs = uri - 1; // use an empty string используйте пустую строку
 
     header_t *h = reqhdr;
     char *t, *t2;
@@ -203,29 +229,33 @@ void respond(int slot) {
       h->name = key;
       h->value = val;
       h++;
-      fprintf(stderr, "[H] %s: %s\n", key, val);
+
       t = val + 1 + strlen(val);
       if (t[1] == '\r' && t[2] == '\n')
         break;
     }
     t = strtok(NULL, "\r\n");
-    t2 = request_header("Content-Length"); // and the related header if there is
+    t2 = request_header("Content-Length"); // and the related header if there is и соответствующий заголовок, если есть
     payload = t;
     payload_size = t2 ? atol(t2) : (rcvd - (t - buf));
 
-    // bind clientfd to stdout, making it easier to write
+    // bind clientfd to stdout, making it easier to write привязать клиентов к stdout, что упрощает написание
     int clientfd = clients[slot];
     dup2(clientfd, STDOUT_FILENO);
     close(clientfd);
 
-    // call router
+    // call router маршрутизатор вызовов
     route();
 
-    // tidy up
+
+    syslog(LOG_INFO, "%s", message_log);
+    
     fflush(stdout);
+    // tidy up убирать
     shutdown(STDOUT_FILENO, SHUT_WR);
     close(STDOUT_FILENO);
   }
 
   free(buf);
+  
 }
